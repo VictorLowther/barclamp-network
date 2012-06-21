@@ -1,4 +1,5 @@
 # Copyright 2011, Dell
+# Copyright 2012, SUSE Linux Products GmbH
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,7 +23,7 @@ when "ubuntu","debian"
     end
     p.run_action :install
   end
-when "centos","redhat"
+when "centos","redhat","suse"
   %w{bridge-utils vconfig}.each do |pkg|
     p = package pkg do
       action :nothing
@@ -175,11 +176,20 @@ old_ifs.each do |name,params|
   next if ifs[name]
   Chef::Log.info("#{name} is no longer being used, deconfiguring it.")
   Nic.new(name).destroy if Nic.exists?(name)
-  if ["centos","redhat"].member?(node["platform"])
+  case node["platform"]
+  when "centos","redhat"
     # Redhat and Centos have lots of small files definining interfaces.
     # Delete the ones we no longer care about here.
     if ::File.exists?("/etc/sysconfig/network-scripts/ifcfg-#{name}")
       ::File.delete("/etc/sysconfig/network-scripts/ifcfg-#{name}")
+    end
+  when "suse"
+    # SuSE also has lots of small files, but in slightly different locations.
+    if ::File.exists?("/etc/sysconfig/network/ifcfg-#{name}")
+      ::File.delete("/etc/sysconfig/network/ifcfg-#{name}")
+    end
+    if ::File.exists?("/etc/sysconfig/network/ifroute-#{name}")
+      ::File.delete("/etc/sysconfig/network/ifroute-#{name}")
     end
   end
 end
@@ -216,7 +226,6 @@ Nic.nics.each do |nic|
     end
   end
   nic.up
-
   Chef::Log.info("#{nic.name}: current addresses: #{nic.addresses.map{|a|a.to_s}.sort.inspect}") unless nic.addresses.empty?
   Chef::Log.info("#{nic.name}: required addresses: #{iface["addresses"].map{|a|a.to_s}.sort.inspect}") unless iface["addresses"].empty?
   # Ditch old addresses, add new ones.
@@ -241,7 +250,6 @@ Nic.nics.each do |nic|
     end
   end
 end
-
 # Wait for the administrative network to come back up.
 Chef::Log.info("Waiting up to 60 seconds for the net to come back")
 60.times do
@@ -285,5 +293,23 @@ when "centos","redhat"
                   :nic => nic # the live object representing the current nic.
                 })
     end
+  end
+when "suse"
+  Nic.nics.each do |nic|
+    next unless ifs[nic.name]
+    template "/etc/sysconfig/network/ifcfg-#{nic.name}" do
+      source "suse-cfg.erb"
+      variables({
+                  :interfaces => ifs,
+                  :nic => nic
+                })
+    end
+    template "/etc/sysconfig/network/ifroute-#{nic.name}" do
+      source "suse-route.erb"
+      variables({
+                  :interfaces => ifs,
+                  :nic => nic
+                })
+    end if ifs[nic.name]["gateway"]
   end
 end
